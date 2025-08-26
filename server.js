@@ -1,8 +1,14 @@
+import http from 'http'
 import { WebSocketServer } from 'ws';
 import { nanoid } from 'nanoid';
 
-const wss = new WebSocketServer({ port: 8080 });
-console.log('WS running on port 8080');
+const server = http.createServer((req, res) => {
+  // simple health check for Render
+  res.writeHead(200, { 'content-type': 'text/plain' })
+  res.end('ok')
+})
+
+const wss = new WebSocketServer({ server });
 
 const rooms = new Map();
 // rooms[room] = { hosts: new Set(), players: new Set(), quizzes: new Map() }
@@ -116,3 +122,8 @@ wss.on('connection', (ws) => {
     room.players.delete(ws);
   });
 });
+
+const PORT = process.env.PORT || 8080   // 8080 for local, PORT on Render
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`listening on http://0.0.0.0:${PORT}`)
+})
