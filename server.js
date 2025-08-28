@@ -1,78 +1,46 @@
 import http from 'http'
-import { WebSocketServer } from 'ws';
-import { nanoid } from 'nanoid';
 
+import { nanoid } from 'nanoid';
+import { WebSocketServer } from 'ws';
+
+// http health check
 const server = http.createServer((req, res) => {
-  // simple health check for Render
   res.writeHead(200, { 'content-type': 'text/plain' })
-  res.end('ok')
+  res.end('status: ok')
 })
 
 const wss = new WebSocketServer({ server });
 
 const rooms = new Map();
-// rooms[room] = { hosts: new Set(), players: new Set(), quizzes: new Map() }
+// rooms[room] = { hosts: new Set(), quizzes: new Map() }
 
-function getRoom(id) {
+const getRoom = (id) => {
   if (!rooms.has(id)) {
-    rooms.set(id, { host: null, players: new Set(), quizzes: new Map() });
+    rooms.set(id, { host: null, quizzes: new Map() });
   }
   return rooms.get(id);
 }
 
-function broadcast(room, payload) {
+const broadcast = (room, payload) => {
   const msg = JSON.stringify(payload);
   for (const h of room.hosts ?? [])  if (h.readyState === 1) h.send(msg);
-  for (const p of room.players ?? []) if (p.readyState === 1) p.send(msg);
   console.log('broadcast', payload);
 }
 
 wss.on('connection', (ws) => {
   let roomId = null;
-  let role = 'player'; // or 'host'
   let userId = nanoid(8);
 
   ws.on('message', (buf) => {
     console.log('msg', buf.toString());
     let m; try { m = JSON.parse(buf); } catch { return; }
 
-    // --- host create / identify ---
-    if (m.type === 'host-create') {
-      roomId = m.room || nanoid(6).toUpperCase();
-      role = 'host';
-      const room = getRoom(roomId);
-      room.hosts ??= new Set();
-      room.hosts.add(ws);
-      ws.send(JSON.stringify({ type: 'room', room: roomId }));
-      return;
-    }
-
-    if (m.type === 'player-join') {
-      roomId = m.room;
-      role = 'player';
-      const room = getRoom(roomId);
-      room.players.add(ws);
-      ws.send(JSON.stringify({ type: 'joined', room: roomId }));
-      broadcast(room, { type: 'players', room: roomId, count: room.players.size });
-      return;
-    }
-
-    // --- quiz upsert / activate (usually sent by slide/player/host on mount) ---
+    // --- quiz upsert / activate (usually sent by the host on mount) ---
     if (m.type === 'quiz-upsert' && m.room && m.quiz?.id) {
       const room = getRoom(m.room);
       const q = room.quizzes.get(m.quiz.id) || { quiz: m.quiz, counts: {}, answersByUser: new Map() };
       q.quiz = m.quiz; // replace definition
       room.quizzes.set(m.quiz.id, q);
-      return;
-    }
-
-    if (m.type === 'quiz-activate' && m.room && m.id) {
-      const room = getRoom(m.room);
-      const q = room.quizzes.get(m.id) || { quiz: { id: m.id }, counts: {}, answersByUser: new Map() };
-      // optional reset on activate:
-      if (m.reset === true) { q.counts = {}; q.answersByUser.clear(); }
-      room.quizzes.set(m.id, q);
-      broadcast(room, { type: 'quiz-active', room: m.room, quiz: q.quiz, counts: q.counts });
       return;
     }
 
@@ -83,6 +51,11 @@ wss.on('connection', (ws) => {
       const r = { type: 'counts', room: m.room, quizId: m.quizId, counts: q?.counts || {} };
       console.log('responding with counts', r);
       ws.send(JSON.stringify(r));
+
+      // register host for subsequent broadcasts
+      room.hosts ??= new Set();
+      room.hosts.add(ws);
+
       return;
     }
 
@@ -118,8 +91,7 @@ wss.on('connection', (ws) => {
     if (!roomId) return;
     const room = rooms.get(roomId);
     if (!room) return;
-    if (room.host === ws) room.host = null;
-    room.players.delete(ws);
+    room.hosts.delete(ws);
   });
 });
 
